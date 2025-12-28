@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Aircraft Radar - Slovenia</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<style>
+  html, body { margin: 0; height: 100%; }
+  #map { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://rawcdn.githack.com/bbecquet/Leaflet.RotatedMarker/master/leaflet.rotatedMarker.js"></script>
+
+<script>
+const map = L.map('map').setView([46.0569, 14.5058], 7);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+// Radar center (Ljubljana)
+const RADAR_CENTER = [46.0569, 14.5058];
+const RADAR_RADIUS_KM = 100;
+
+// Radar coverage circle
+L.circle(RADAR_CENTER, {
+  radius: RADAR_RADIUS_KM * 1000, // meters
+  color: '#00ff00',
+  weight: 2,
+  fillColor: '#000000',
+  fillOpacity: 0.05,
+  dashArray: '8 8'
+}).addTo(map);
+
+L.circleMarker(RADAR_CENTER, {
+  radius: 4,
+  color: '#00ff00',
+  fillColor: '#00ff00',
+  fillOpacity: 1
+}).addTo(map);
+
+const aircraft = {};
+const EARTH_RADIUS = 6378137;
+const FETCH_INTERVAL = 10000;
+const UPDATE_INTERVAL = 1000;
+
+// ---------- HELPERS ----------
+function toRad(d){return d*Math.PI/180}
+function toDeg(r){return r*180/Math.PI}
+
+// Altitude color
+function altitudeColor(alt) {
+  if (alt < 3000) return '#00aaff';
+  if (alt < 8000) return '#00ff00';
+  if (alt < 11000) return '#ffff00';
+  return '#ff3333';
+}
+
+// Speed → trail length
+function trailLength(speed) {
+  return Math.min(50, Math.max(10, speed / 3));
+}
+
+// Predict movement
+function project(lat, lon, speed, heading, dt) {
+  const d = speed * dt;
+  const h = toRad(heading);
+  const lat1 = toRad(lat);
+  const lon1 = toRad(lon);
+
+  const lat2 = Math.asin(
+    Math.sin(lat1)*Math.cos(d/EARTH_RADIUS) +
+    Math.cos(lat1)*Math.sin(d/EARTH_RADIUS)*Math.cos(h)
+  );
+
+  const lon2 = lon1 + Math.atan2(
+    Math.sin(h)*Math.sin(d/EARTH_RADIUS)*Math.cos(lat1),
+    Math.cos(d/EARTH_RADIUS)-Math.sin(lat1)*Math.sin(lat2)
+  );
+
+  return [toDeg(lat2), toDeg(lon2)];
+}
+
+// ---------- FETCH ----------
+async function fetchAircraft() {
+  const res = await fetch('http://127.0.0.1:8000/aircraft');
+  const data = await res.json();
+  const now = Date.now();
+
+  data.forEach(ac => {
+    if (!ac.lat || !ac.lon) return;
+
+    const color = altitudeColor(ac.altitude);
+
+    if (!aircraft[ac.icao24]) {
+      const icon = L.divIcon({
+        className: '',
+        html: `<img src="marker.svg" style="
+          width:32px;
+          height:32px;
+          filter: drop-shadow(0 0 2px black) sepia(1) saturate(5) hue-rotate(${Math.random()*360}deg);
+        ">`,
+        iconSize: [32,32],
+        iconAnchor: [16,16]
+      });
+
+      const marker = L.marker([ac.lat, ac.lon], {
+        icon,
+        rotationAngle: ac.heading,
+        rotationOrigin: 'center center'
+      }).addTo(map);
+
+      const trail = L.polyline([[ac.lat, ac.lon]], {
+        color,
+        weight: 2,
+        opacity: 0.9
+      }).addTo(map);
+
+      aircraft[ac.icao24] = {
+        marker, trail,
+        lat: ac.lat, lon: ac.lon,
+        speed: ac.velocity || 0,
+        heading: ac.heading || 0,
+        altitude: ac.altitude || 0,
+        last: now
+      };
+    } else {
+      Object.assign(aircraft[ac.icao24], {
+        lat: ac.lat,
+        lon: ac.lon,
+        speed: ac.velocity || 0,
+        heading: ac.heading || 0,
+        altitude: ac.altitude || 0,
+        last: now
+      });
+    }
+  });
+}
+
+// ---------- UPDATE LOOP ----------
+function updatePositions() {
+  const now = Date.now();
+
+  Object.values(aircraft).forEach(a => {
+    const dt = (now - a.last) / 1000;
+    if (dt <= 0) return;
+
+    const [lat, lon] = project(a.lat, a.lon, a.speed, a.heading, dt);
+    a.lat = lat; a.lon = lon; a.last = now;
+
+    a.marker.setLatLng([lat, lon]);
+    a.marker.setRotationAngle(a.heading);
+
+    // Trail
+    a.trail.addLatLng([lat, lon]);
+    const maxLen = trailLength(a.speed);
+    const pts = a.trail.getLatLngs().slice(-maxLen);
+    a.trail.setLatLngs(pts);
+
+    a.trail.setStyle({
+      color: altitudeColor(a.altitude),
+      opacity: Math.min(1, a.speed / 250)
+    });
+  });
+}
+
+// ---------- START ----------
+fetchAircraft();
+setInterval(fetchAircraft, FETCH_INTERVAL);
+setInterval(updatePositions, UPDATE_INTERVAL);
+</script>
+</body>
+</html>
