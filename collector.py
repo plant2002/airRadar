@@ -18,15 +18,15 @@ DB_CONFIG = {
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
 
 # Slovenia / nearby region
-BBOX = {
-    "lamin": 47.0,
-    "lamax": 48.0,
-    "lomin": 11.0,
-    "lomax": 19.0
-}
+TILES = [
+    {"lamin":44.0, "lamax":46.0, "lomin":11.0, "lomax":15.0},
+    {"lamin":44.0, "lamax":46.0, "lomin":15.0, "lomax":19.0},
+    {"lamin":46.0, "lamax":48.0, "lomin":11.0, "lomax":15.0},
+    {"lamin":46.0, "lamax":48.0, "lomin":15.0, "lomax":19.0}
+]
 
 # seconds between API calls
-FETCH_INTERVAL = 20
+FETCH_INTERVAL = 10
 
 
 # -----------------------------
@@ -52,8 +52,8 @@ HEADING=VALUES(HEADING)
 # -----------------------------
 # FETCH DATA FROM OPENSKY
 # -----------------------------
-def fetch_aircraft():
-    response = requests.get(OPENSKY_URL, params=BBOX)
+def fetch_aircraft(bbox):
+    response = requests.get(OPENSKY_URL, params=bbox, timeout=10)
 
     if response.status_code != 200:
         print("OpenSky error:", response.status_code)
@@ -121,11 +121,20 @@ def main():
 
     print("AirRadar data collector started")
 
+    tile_index = 0
+
     while True:
 
         try:
-            rows = fetch_aircraft()
+            bbox = TILES[tile_index]
+
+            print("Querying tile:", bbox)
+
+            rows = fetch_aircraft(bbox)
             save_to_db(rows)
+
+            # rotate tile
+            tile_index = (tile_index + 1) % len(TILES)
 
         except Exception as e:
             print("Error:", e)
