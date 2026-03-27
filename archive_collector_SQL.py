@@ -1,10 +1,23 @@
-import requests
 import mysql.connector
 from datetime import datetime, timedelta
 import trino
 import time
 import random
+import pandas as pd
+# -----------------------------
+# PROGRESS FILE
+# -----------------------------
+start_day_index = 0
+start_tile_index = 0
 
+try:
+    with open("progress.txt", "r") as f:
+        d, t = f.read().split(",")
+        start_day_index = int(d)
+        start_tile_index = int(t)
+        print("Resuming from:", start_day_index, start_tile_index)
+except:
+    print("No progress file, starting fresh")
 # -----------------------------
 # DATABASE CONFIG
 # -----------------------------
@@ -15,7 +28,6 @@ DB_CONFIG = {
     "database": "airradar"
 }
 
-
 # -----------------------------
 # CONNECT DATABASE
 # -----------------------------
@@ -24,16 +36,25 @@ db_cursor = db.cursor()
 
 insert_sql = """
 INSERT INTO aircraft
-(ICAO24, CALLSIGN, LAT, LON, ALTITUDE, VELOCITY, HEADING)
-VALUES (%s,%s,%s,%s,%s,%s,%s)
-ON DUPLICATE KEY UPDATE
-CALLSIGN=VALUES(CALLSIGN),
-LAT=VALUES(LAT),
-LON=VALUES(LON),
-ALTITUDE=VALUES(ALTITUDE),
-VELOCITY=VALUES(VELOCITY),
-HEADING=VALUES(HEADING)
+(ICAO24, CALLSIGN, LAT, LON, ALTITUDE, VELOCITY, HEADING, TIME)
+VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
 """
+# -----------------------------
+# SAVE TO DATABASE
+# -----------------------------
+def save_to_db(rows):
+
+    if not rows:
+        return
+
+    try:
+        db_cursor.executemany(insert_sql, rows)
+        db.commit()
+        print(f"Inserted/updated {db_cursor.rowcount} aircraft")
+
+    except Exception as e:
+        print("Database error:", e)
+
 
 # -----------------------------
 # TRINO CONNECTION
@@ -53,13 +74,13 @@ def fetch_trino(day, tile):
     end = (day + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
 
     query = f"""
-    SELECT icao24, callsign, lat, lon, geo_altitude, velocity, heading
-    FROM state_vectors_data4
-    WHERE time >= TIMESTAMP '{start}'
-      AND time < TIMESTAMP '{end}'
-      AND lon BETWEEN {tile['lomin']} AND {tile['lomax']}
-      AND lat BETWEEN {tile['lamin']} AND {tile['lamax']}
-    """
+        SELECT icao24, callsign, lat, lon, geo_altitude, velocity, heading, time
+        FROM state_vectors_data4
+        WHERE time >= TIMESTAMP '{start}'
+        AND time < TIMESTAMP '{end}'
+        AND lon BETWEEN {tile['lomin']} AND {tile['lomax']}
+        AND lat BETWEEN {tile['lamin']} AND {tile['lamax']}
+        """
 
     cursor.execute(query)
     return cursor.fetchall()
@@ -98,6 +119,16 @@ def generate_tiles(lat_min, lat_max, lon_min, lon_max, step=0.5):
 
     return tiles
 # -----------------------------
+# CLEAN ROWS
+# -----------------------------
+def clean_rows(rows):
+    cleaned = []
+    for r in rows:
+        if r[2] is None or r[3] is None:  # lat/lon
+            continue
+        cleaned.append(tuple(x if x is not None else 0 for x in r))
+    return cleaned
+# -----------------------------
 # MAIN LOOP
 # -----------------------------
 tiles = generate_tiles(44.12, 47.68, 11.05, 19.07, step=0.5)
@@ -105,20 +136,23 @@ tiles = generate_tiles(44.12, 47.68, 11.05, 19.07, step=0.5)
 start_date = datetime(2023, 1, 1)
 end_date   = datetime(2025, 1, 1)
 
-for day in generate_days(start_date, end_date):
+for day_index, day in enumerate(generate_days(start_date, end_date)):
 
     print("Processing day:", day.date())
 
-    for tile in tiles:
+    for tile_index, tile in enumerate(tiles):
         try:
             print("Tile:", tile)
 
-            rows = fetch_trino(day, tile)
-
+            rows = clean_rows(fetch_trino(day, tile))
             save_to_db(rows)
+
+            # SAVE PROGRESS HERE
+            with open("progress.txt", "w") as f:
+                f.write(f"{day_index},{tile_index}")
 
             polite_sleep()
 
         except Exception as e:
             print("Error:", e)
-            time.sleep(10)  # backoff
+            time.sleep(10)
