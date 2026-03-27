@@ -1,7 +1,10 @@
 import requests
 import mysql.connector
-import time
+from datetime import datetime, timedelta
 import trino
+import time
+import random
+
 # -----------------------------
 # DATABASE CONFIG
 # -----------------------------
@@ -32,12 +35,9 @@ VELOCITY=VALUES(VELOCITY),
 HEADING=VALUES(HEADING)
 """
 
-
 # -----------------------------
-# FETCH DATA
+# TRINO CONNECTION
 # -----------------------------
-
-#trino connection
 conn = trino.dbapi.connect(
     host = "trino.opensky-netowrk.org",
     port= 443,
@@ -48,8 +48,6 @@ conn = trino.dbapi.connect(
 )
 cursor = conn.cursor()
 
-
-#feth function
 def fetch_trino(day, tile):
     start = day.strftime("%Y-%m-%d 00:00:00")
     end = (day + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
@@ -66,54 +64,61 @@ def fetch_trino(day, tile):
     cursor.execute(query)
     return cursor.fetchall()
 
-
 # -----------------------------
-# SAVE TO DATABASE
+# TIME CHUNKS
 # -----------------------------
-def save_to_db(rows):
+def generate_days(start_date, end_date):
+    current = start_date
+    while current < end_date:
+        yield current
+        current += timedelta(days=1)
+# -----------------------------
+# REST
+# -----------------------------
+def polite_sleep():
+    time.sleep(2 + random.random())  # 2–3 seconds
+# -----------------------------
+# TILES
+# -----------------------------
+def generate_tiles(lat_min, lat_max, lon_min, lon_max, step=0.5):
+    tiles = []
+    
+    lat = lat_min
+    while lat < lat_max:
+        lon = lon_min
+        while lon < lon_max:
+            tiles.append({
+                "lamin": lat,
+                "lamax": lat + step,
+                "lomin": lon,
+                "lomax": lon + step
+            })
+            lon += step
+        lat += step
 
-    if not rows:
-        return
-
-    try:
-        db_cursor.executemany(insert_sql, rows)
-        db.commit()
-        print(f"Inserted/updated {db_cursor.rowcount} aircraft")
-
-    except Exception as e:
-        print("Database error:", e)
-
-
+    return tiles
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
-def main():
+tiles = generate_tiles(44.12, 47.68, 11.05, 19.07, step=0.5)
 
-    print("AirRadar data collector started")
+start_date = datetime(2023, 1, 1)
+end_date   = datetime(2025, 1, 1)
 
-    tile_index = 0
+for day in generate_days(start_date, end_date):
 
-    while True:
+    print("Processing day:", day.date())
 
+    for tile in tiles:
         try:
-            bbox = TILES[tile_index]
+            print("Tile:", tile)
 
-            print("Querying tile:", bbox)
+            rows = fetch_trino(day, tile)
 
-            rows = fetch_aircraft(bbox)
             save_to_db(rows)
 
-            # rotate tile
-            tile_index = (tile_index + 1) % len(TILES)
+            polite_sleep()
 
         except Exception as e:
             print("Error:", e)
-
-        time.sleep(FETCH_INTERVAL)
-
-
-# -----------------------------
-# START
-# -----------------------------
-if __name__ == "__main__":
-    main()
+            time.sleep(10)  # backoff
