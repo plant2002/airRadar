@@ -1,9 +1,9 @@
 import mysql.connector
 from datetime import datetime, timedelta
-import trino
 import time
 import pandas as pd
 import os
+from traffic.data import opensky
 # -----------------------------
 # PROGRESS FILE
 # -----------------------------
@@ -69,10 +69,11 @@ def save_to_db(rows):
 conn = trino.dbapi.connect(
     host = "trino.opensky-network.org",
     port= 443,
-    user = "ms68672",
+    user = "ms68672-api-client",
     http_scheme = "https",
     catalog = "opensky",
-    schema = "default"
+    schema = "default",
+    auth = BasicAuthentication('ms68672-api-client', 'password')
 )
 cursor = conn.cursor()
 
