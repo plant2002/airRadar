@@ -4,6 +4,7 @@ import time
 import pandas as pd
 import os
 from traffic.data import opensky
+import trino
 # -----------------------------
 # PROGRESS FILE
 # -----------------------------
@@ -73,7 +74,8 @@ conn = trino.dbapi.connect(
     http_scheme = "https",
     catalog = "opensky",
     schema = "default",
-    auth = BasicAuthentication('ms68672-api-client', 'password')
+    auth = trino.auth.BasicAuthentication('ms68672-api-client', 'wAhQDyIrQFIUrbXScYK0Jyhri7gOQaxO'),
+    verify = True
 )
 cursor = conn.cursor()
 
@@ -167,8 +169,8 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
             # PARQUET
             if rows: 
                 df = pd.DataFrame(rows, columns=["icao24", "callsign", "lat", "lon", "altitude", "velocity", "heading", "time"])
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
                 filename = f"parquet/year={day.year}/month={day.month}/day={day.day}/tile={tile_index}.parquet"
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
                 df.to_parquet(filename, index=False)
             if not rows:
                 print("No data for this tile")

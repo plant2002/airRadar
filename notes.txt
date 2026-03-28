@@ -2,3 +2,6 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 current conda version: 26.1.1
 conda create -n traffic-env python=3.12
+
+
+trino --user=$USER --password --server=https://trino.opensky-network.org --external-authentication --catalog "minio" --schema "osky"
