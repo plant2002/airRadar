@@ -4,4 +4,16 @@ current conda version: 26.1.1
 conda create -n traffic-env python=3.12
 
 
-trino --user=$USER --password --server=https://trino.opensky-network.org --external-authentication --catalog "minio" --schema "osky"
+trino --user=$USER --password --server=https://trino.opensky-network.org --external-authentication --catalog "minio" --schema "osky"74
+
+Citation:
+@article{olive2019traffic,
+    author={Xavier {Olive}},
+    journal={Journal of Open Source Software},
+    title={traffic, a toolbox for processing and analysing air traffic data},
+    year={2019},
+    volume={4},
+    pages={1518},
+    doi={10.21105/joss.01518},
+    issn={2475-9066},
+}

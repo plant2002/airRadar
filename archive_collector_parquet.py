@@ -3,8 +3,11 @@ from datetime import datetime, timedelta
 import time
 import pandas as pd
 import os
+os.environ["OPENSKY_USERNAME"] = "ms68672"
+os.environ["OPENSKY_PASSWORD"] = "8LPq04Wq9hA6e4QMGb87vz5JC80a2CMm"
 from traffic.data import opensky
 import trino
+from trino.auth import OAuth2Authentication
 # -----------------------------
 # PROGRESS FILE
 # -----------------------------
@@ -64,37 +67,52 @@ def save_to_db(rows):
         print("Database error:", e)
 
 
-# -----------------------------
-# TRINO CONNECTION
-# -----------------------------
-conn = trino.dbapi.connect(
-    host = "trino.opensky-network.org",
-    port= 443,
-    user = "ms68672-api-client",
-    http_scheme = "https",
-    catalog = "opensky",
-    schema = "default",
-    auth = trino.auth.BasicAuthentication('ms68672-api-client', 'wAhQDyIrQFIUrbXScYK0Jyhri7gOQaxO'),
-    verify = True
-)
-cursor = conn.cursor()
+# def fetch_trino(day, tile):
+#     start = day.strftime("%Y-%m-%d 00:00:00")
+#     end = (day + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
 
+#     query = f"""
+#         SELECT icao24, callsign, lat, lon, geo_altitude, velocity, heading, time
+#         FROM state_vectors_data4
+#         WHERE time >= TIMESTAMP '{start}'
+#         AND time < TIMESTAMP '{end}'
+#         AND lon BETWEEN {tile['lomin']} AND {tile['lomax']}
+#         AND lat BETWEEN {tile['lamin']} AND {tile['lamax']}
+#         LIMIT 100000
+#         """
+
+#     cursor.execute(query)
+#     return cursor.fetchall()
 def fetch_trino(day, tile):
-    start = day.strftime("%Y-%m-%d 00:00:00")
-    end = (day + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
+    start = day
+    stop = day + timedelta(days=1)
 
-    query = f"""
-        SELECT icao24, callsign, lat, lon, geo_altitude, velocity, heading, time
-        FROM state_vectors_data4
-        WHERE time >= TIMESTAMP '{start}'
-        AND time < TIMESTAMP '{end}'
-        AND lon BETWEEN {tile['lomin']} AND {tile['lomax']}
-        AND lat BETWEEN {tile['lamin']} AND {tile['lamax']}
-        LIMIT 100000
-        """
+    bounds = (
+        tile["lamin"],  # south
+        tile["lamax"],  # north
+        tile["lomin"],  # west
+        tile["lomax"]   # east
+    )
 
-    cursor.execute(query)
-    return cursor.fetchall()
+    df = opensky.history(
+        start=start,
+        stop=stop,
+        bounds=bounds
+    )
+
+    if df is None or df.empty:
+        return []
+
+    return df[[
+        "icao24",
+        "callsign",
+        "lat",
+        "lon",
+        "geo_altitude",
+        "velocity",
+        "heading",
+        "time"
+    ]].itertuples(index=False, name=None)
 
 # -----------------------------
 # TIME CHUNKS
