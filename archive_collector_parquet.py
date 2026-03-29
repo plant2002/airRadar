@@ -3,11 +3,11 @@ from datetime import datetime, timedelta
 import time
 import pandas as pd
 import os
-os.environ["OPENSKY_USERNAME"] = "ms68672"
-os.environ["OPENSKY_PASSWORD"] = "8LPq04Wq9hA6e4QMGb87vz5JC80a2CMm"
+os.environ["TRINO_CONFIG_DIR"] = os.path.expanduser("~/.trino")
+os.makedirs(os.environ["TRINO_CONFIG_DIR"], exist_ok=True)
 from traffic.data import opensky
-import trino
-from trino.auth import OAuth2Authentication
+import logging
+logging.basicConfig(level=logging.DEBUG)
 # -----------------------------
 # PROGRESS FILE
 # -----------------------------
@@ -67,6 +67,7 @@ def save_to_db(rows):
         print("Database error:", e)
 
 
+#-----------------------------------OLD VERSION NOT IN USE---------------------------
 # def fetch_trino(day, tile):
 #     start = day.strftime("%Y-%m-%d 00:00:00")
 #     end = (day + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
@@ -83,6 +84,10 @@ def save_to_db(rows):
 
 #     cursor.execute(query)
 #     return cursor.fetchall()
+#-------------------------------------------------------------------------------------
+# -----------------------------
+# FETCH FUNCTION NO DYNAMIC CHANGES
+# -----------------------------
 def fetch_trino(day, tile):
     start = day
     stop = day + timedelta(days=1)
@@ -113,6 +118,47 @@ def fetch_trino(day, tile):
         "heading",
         "time"
     ]].itertuples(index=False, name=None)
+
+# -----------------------------
+# DYNAMIC FETCH FUNCTION
+# -----------------------------
+def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
+    """
+    dynamic fetch of OpenSky data. If the query exceeds the timeframe it get's split into smaller tiles
+    """
+    try:
+        start_time = time.time()
+        rows, query_duration = fetch_trino(day, tile)
+        duration = time.time() - start_time
+
+        if duration <= max_duration or (tile["lamax"] - tile["lamin"] <= min_step):
+            # fast enough or tile too small to split
+            return clean_rows(rows), duration
+
+        # Slow query: split tile into 4 subtiles (quadtree style)
+        mid_lat = (tile["lamin"] + tile["lamax"]) / 2
+        mid_lon = (tile["lomin"] + tile["lomax"]) / 2
+
+        subtiles = [
+            {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": tile["lomin"], "lomax": mid_lon},
+            {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": mid_lon, "lomax": tile["lomax"]},
+            {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": tile["lomin"], "lomax": mid_lon},
+            {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": mid_lon, "lomax": tile["lomax"]},
+        ]
+
+        all_rows = []
+        total_duration = 0
+        for st in subtiles:
+            st_rows, st_duration = fetch_with_dynamic_split(day, st, max_duration, min_step)
+            all_rows.extend(st_rows)
+            total_duration += st_duration
+
+        return all_rows, total_duration
+
+    except Exception as e:
+        print("Error fetching tile:", tile, e)
+        return [], 0
+
 
 # -----------------------------
 # TIME CHUNKS
@@ -159,13 +205,18 @@ def clean_rows(rows):
         cleaned.append(tuple(x if x is not None else 0 for x in r))
     return cleaned
 # -----------------------------
-# MAIN LOOP
+# TILES CHANGES
 # -----------------------------
 tiles = generate_tiles(44.12, 47.68, 11.05, 19.07, step=0.5)
 
+# -----------------------------
+# TIMEFRAME CHANGES
+# -----------------------------
 start_date = datetime(2024, 1, 1)
-end_date   = datetime(2026, 1, 1)
-
+end_date   = datetime(2024, 1, 2)
+# -----------------------------
+# MAIN LOOP
+# -----------------------------
 for day_index, day in enumerate(generate_days(start_date, end_date)):
 
     if day_index < start_day_index:
@@ -174,34 +225,42 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
     print("Processing day:", day.date())
 
     for tile_index, tile in enumerate(tiles):
+        if tile_index < start_tile_index and day_index == start_day_index:
+            continue
         try:
             print("Tile:", tile)
-            #check to not hammer the server
-            start_time = time.time()
-            #fetch from database
-            rows = clean_rows(fetch_trino(day, tile))
-            #check to not hammer the server
-            duration = time.time() - start_time
-            if duration > 10:
-                print(f"⚠️ Slow query: {duration:.2f}s")
-            # PARQUET
-            if rows: 
-                df = pd.DataFrame(rows, columns=["icao24", "callsign", "lat", "lon", "altitude", "velocity", "heading", "time"])
+            
+            #FETCH DATA + QUERY DURATION
+            rows, query_duration = fetch_with_dynamic_split(day, tile)
+            print(f"Server query time: {query_duration:.2f}s")
+
+            #QUERY TIME WARNING
+            if query_duration > 30:
+                print(f"⚠️ Slow query: {query_duration:.2f}s")
+
+            #CLEAN ROWS
+            rows = clean_rows(rows)
+            # SAVE TO PARQUET
+            if rows:
+                df = pd.DataFrame(
+                    rows,
+                    columns=["icao24", "callsign", "lat", "lon", "altitude", "velocity", "heading", "time"]
+                )
                 filename = f"parquet/year={day.year}/month={day.month}/day={day.day}/tile={tile_index}.parquet"
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
                 df.to_parquet(filename, index=False)
-            if not rows:
+            else:
                 print("No data for this tile")
 
             
-            #SQL
+            #SAVE TO DATABASE
             save_to_db(rows)
 
-            # SAVE PROGRESS HERE
+            # SAVE PROGRESS
             with open("progress.txt", "w") as f:
                 f.write(f"{day_index},{tile_index}")
 
-            polite_sleep(duration)
+            polite_sleep(query_duration)
 
         except Exception as e:
             print("Error:", e)
