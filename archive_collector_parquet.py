@@ -90,23 +90,26 @@ def save_to_db(rows):
 # -----------------------------
 def fetch_trino(day, tile):
     start = day
-    stop = day + timedelta(days=1)
+    all_chunks = []
 
-    bounds = (
-        tile["lamin"],  # south
-        tile["lamax"],  # north
-        tile["lomin"],  # west
-        tile["lomax"]   # east
-    )
+    while start < day + timedelta(days=1):
+        stop = min(start + timedelta(hours=1), day + timedelta(days=1))
+        df_chunk = opensky.history(
+            start=start,
+            stop=stop,
+            lat=(tile["lamin"], tile["lamax"]),
+            lon=(tile["lomin"], tile["lomax"])
+        )
 
-    df = opensky.history(
-        start=start,
-        stop=stop,
-        bounds=bounds
-    )
+        if df_chunk is not None and not df_chunk.empty:
+            all_chunks.append(df_chunk)
 
-    if df is None or df.empty:
-        return []
+        start = stop
+
+    if not all_chunks:
+        return [], 0
+
+    df = pd.concat(all_chunks, ignore_index=True)
 
     return df[[
         "icao24",
@@ -124,41 +127,70 @@ def fetch_trino(day, tile):
 # -----------------------------
 def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
     """
-    dynamic fetch of OpenSky data. If the query exceeds the timeframe it get's split into smaller tiles
+    Efficient dynamic fetch of OpenSky data with hourly chunks.
+    Splits tiles if the query takes too long or tile is too large.
     """
     try:
         start_time = time.time()
-        rows, query_duration = fetch_trino(day, tile)
+
+        # Collect all rows for this tile
+        start = day
+        all_rows = []
+
+        while start < day + timedelta(days=1):
+            stop = min(start + timedelta(hours=1), day + timedelta(days=1))
+
+            df_chunk = opensky.history(
+                start=start,
+                stop=stop,
+                lat=(tile["lamin"], tile["lamax"]),
+                lon=(tile["lomin"], tile["lomax"])
+            )
+
+            if df_chunk is not None and not df_chunk.empty:
+                rows_chunk = df_chunk[[
+                    "icao24",
+                    "callsign",
+                    "lat",
+                    "lon",
+                    "geo_altitude",
+                    "velocity",
+                    "heading",
+                    "time"
+                ]].itertuples(index=False, name=None)
+                all_rows.extend(rows_chunk)
+
+            start = stop
+
         duration = time.time() - start_time
 
-        if duration <= max_duration or (tile["lamax"] - tile["lamin"] <= min_step):
-            # fast enough or tile too small to split
-            return clean_rows(rows), duration
+        # If too slow AND tile is still splittable, split into 4 subtiles
+        if duration > max_duration and (tile["lamax"] - tile["lamin"] > min_step):
+            mid_lat = (tile["lamin"] + tile["lamax"]) / 2
+            mid_lon = (tile["lomin"] + tile["lomax"]) / 2
 
-        # Slow query: split tile into 4 subtiles (quadtree style)
-        mid_lat = (tile["lamin"] + tile["lamax"]) / 2
-        mid_lon = (tile["lomin"] + tile["lomax"]) / 2
+            subtiles = [
+                {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": tile["lomin"], "lomax": mid_lon},
+                {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": mid_lon, "lomax": tile["lomax"]},
+                {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": tile["lomin"], "lomax": mid_lon},
+                {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": mid_lon, "lomax": tile["lomax"]},
+            ]
 
-        subtiles = [
-            {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": tile["lomin"], "lomax": mid_lon},
-            {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": mid_lon, "lomax": tile["lomax"]},
-            {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": tile["lomin"], "lomax": mid_lon},
-            {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": mid_lon, "lomax": tile["lomax"]},
-        ]
+            # Reset all_rows, recursively fetch from subtiles
+            all_rows = []
+            total_duration = 0
+            for st in subtiles:
+                st_rows, st_duration = fetch_with_dynamic_split(day, st, max_duration, min_step)
+                all_rows.extend(st_rows)
+                total_duration += st_duration
 
-        all_rows = []
-        total_duration = 0
-        for st in subtiles:
-            st_rows, st_duration = fetch_with_dynamic_split(day, st, max_duration, min_step)
-            all_rows.extend(st_rows)
-            total_duration += st_duration
+            return all_rows, total_duration
 
-        return all_rows, total_duration
+        return clean_rows(all_rows), duration
 
     except Exception as e:
         print("Error fetching tile:", tile, e)
         return [], 0
-
 
 # -----------------------------
 # TIME CHUNKS
@@ -207,7 +239,7 @@ def clean_rows(rows):
 # -----------------------------
 # TILES CHANGES
 # -----------------------------
-tiles = generate_tiles(44.12, 47.68, 11.05, 19.07, step=0.5)
+tiles = generate_tiles(44.12, 47.68, 11.05, 19.07, step=0.25)
 
 # -----------------------------
 # TIMEFRAME CHANGES

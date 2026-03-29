@@ -2,6 +2,9 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 
 current conda version: 26.1.1
 conda create -n traffic-env python=3.12
+conda activate traffic-env
+
+CTRL + SHIFT + P --> python: Select Interpreter
 
 
 trino --user=$USER --password --server=https://trino.opensky-network.org --external-authentication --catalog "minio" --schema "osky"74
@@ -17,3 +20,7 @@ Citation:
     doi={10.21105/joss.01518},
     issn={2475-9066},
 }
+
+https://openskynetwork.github.io/opensky-api/trino.html
+https://opensky-network.org/data/trino
+https://traffic-viz.github.io/
