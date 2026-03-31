@@ -89,8 +89,8 @@ def fetch_trino(day, tile):
 
         if df_chunk is not None and not df_chunk.empty:
             rows_chunk = df_chunk[[
-                "icao24", "callsign", "lat", "lon",
-                "geoaltitude", "velocity", "heading", "time"
+                "time", "icao24", "lat", "lon", "velocity",  "heading", "callsign",
+                "geoaltitude"
             ]].itertuples(index=False, name=None)
 
             all_rows.extend(rows_chunk)
@@ -133,9 +133,10 @@ def fetch_with_dynamic_split(day, tile, max_duration=45, min_step=0.1):
             polite_sleep(duration)
 
             if df_chunk is not None and not df_chunk.empty:
-                columns_needed = ["icao24","callsign","lat","lon","geoaltitude","velocity","heading","time"]
-                df_chunk = df_chunk.reindex(columns=columns_needed, fill_value=0)
-                rows_chunk = df_chunk.itertuples(index=False, name=None)
+                rows_chunk = df_chunk[[
+                "time", "icao24", "lat", "lon", "velocity",  "heading", "callsign",
+                "geoaltitude"
+                    ]].itertuples(index=False, name=None)
                 all_rows.extend(rows_chunk)
 
             start = stop
@@ -255,7 +256,7 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
             if rows:
                 df = pd.DataFrame(
                     rows,
-                    columns=["icao24", "callsign", "lat", "lon", "altitude", "velocity", "heading", "time"]
+                    columns=["time", "icao24", "lat", "lon", "velocity",  "heading", "callsign", "geoaltitude"]
                 )
                 filename = f"parquet/year={day.year}/month={day.month}/day={day.day}/tile={tile_index}.parquet"
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
