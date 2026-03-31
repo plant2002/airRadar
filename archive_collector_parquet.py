@@ -108,7 +108,7 @@ def fetch_trino(day, tile):
         if df_chunk is not None and not df_chunk.empty:
             rows_chunk = df_chunk[[
                 "icao24", "callsign", "lat", "lon",
-                "geo_altitude", "velocity", "heading", "time"
+                "geoaltitude", "velocity", "heading", "time"
             ]].itertuples(index=False, name=None)
 
             all_rows.extend(rows_chunk)
@@ -143,6 +143,9 @@ def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
                 lat=(tile["lamin"], tile["lamax"]),
                 lon=(tile["lomin"], tile["lomax"])
             )
+            print(df_chunk.head())
+            print(df_chunk.columns)
+            print(len(df_chunk))
 
             duration = time.time() - t0
             polite_sleep(duration)
@@ -153,7 +156,7 @@ def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
                     "callsign",
                     "lat",
                     "lon",
-                    "geo_altitude",
+                    "geoaltitude",
                     "velocity",
                     "heading",
                     "time"
