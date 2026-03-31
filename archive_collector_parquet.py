@@ -90,37 +90,32 @@ def save_to_db(rows):
 # -----------------------------
 def fetch_trino(day, tile):
     start = day
-    all_chunks = []
+    all_rows = []
 
     while start < day + timedelta(days=1):
         stop = min(start + timedelta(hours=1), day + timedelta(days=1))
+
+        t0 = time.time()
         df_chunk = opensky.history(
             start=start,
             stop=stop,
             lat=(tile["lamin"], tile["lamax"]),
             lon=(tile["lomin"], tile["lomax"])
         )
+        duration = time.time() - t0
+        polite_sleep(duration)
 
         if df_chunk is not None and not df_chunk.empty:
-            all_chunks.append(df_chunk)
+            rows_chunk = df_chunk[[
+                "icao24", "callsign", "lat", "lon",
+                "geo_altitude", "velocity", "heading", "time"
+            ]].itertuples(index=False, name=None)
+
+            all_rows.extend(rows_chunk)
 
         start = stop
 
-    if not all_chunks:
-        return [], 0
-
-    df = pd.concat(all_chunks, ignore_index=True)
-
-    return df[[
-        "icao24",
-        "callsign",
-        "lat",
-        "lon",
-        "geo_altitude",
-        "velocity",
-        "heading",
-        "time"
-    ]].itertuples(index=False, name=None)
+    return clean_rows(all_rows)
 
 # -----------------------------
 # DYNAMIC FETCH FUNCTION
@@ -140,12 +135,17 @@ def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
         while start < day + timedelta(days=1):
             stop = min(start + timedelta(hours=1), day + timedelta(days=1))
 
+            t0 = time.time()
+
             df_chunk = opensky.history(
                 start=start,
                 stop=stop,
                 lat=(tile["lamin"], tile["lamax"]),
                 lon=(tile["lomin"], tile["lomax"])
             )
+
+            duration = time.time() - t0
+            polite_sleep(duration)
 
             if df_chunk is not None and not df_chunk.empty:
                 rows_chunk = df_chunk[[
@@ -161,11 +161,10 @@ def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
                 all_rows.extend(rows_chunk)
 
             start = stop
-
-        duration = time.time() - start_time
+        total_duration = time.time() - start_time
 
         # If too slow AND tile is still splittable, split into 4 subtiles
-        if duration > max_duration and (tile["lamax"] - tile["lamin"] > min_step):
+        if total_duration > max_duration and (tile["lamax"] - tile["lamin"] > min_step):
             mid_lat = (tile["lamin"] + tile["lamax"]) / 2
             mid_lon = (tile["lomin"] + tile["lomax"]) / 2
 
@@ -181,12 +180,15 @@ def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
             total_duration = 0
             for st in subtiles:
                 st_rows, st_duration = fetch_with_dynamic_split(day, st, max_duration, min_step)
+                
                 all_rows.extend(st_rows)
                 total_duration += st_duration
 
+                polite_sleep(st_duration)
+
             return all_rows, total_duration
 
-        return clean_rows(all_rows), duration
+        return clean_rows(all_rows), total_duration
 
     except Exception as e:
         print("Error fetching tile:", tile, e)
@@ -204,7 +206,7 @@ def generate_days(start_date, end_date):
 # REST
 # -----------------------------
 def polite_sleep(duration):
-    sleep_time = max(2, duration * 0.7)
+    sleep_time = max(2, duration * 1.5)
     time.sleep(sleep_time)
 # -----------------------------
 # TILES
@@ -270,8 +272,6 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
             if query_duration > 30:
                 print(f"⚠️ Slow query: {query_duration:.2f}s")
 
-            #CLEAN ROWS
-            rows = clean_rows(rows)
             # SAVE TO PARQUET
             if rows:
                 df = pd.DataFrame(
@@ -292,7 +292,7 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
             with open("progress.txt", "w") as f:
                 f.write(f"{day_index},{tile_index}")
 
-            polite_sleep(query_duration)
+            time.sleep(2)
 
         except Exception as e:
             print("Error:", e)
