@@ -7,6 +7,7 @@ os.environ["TRINO_CONFIG_DIR"] = os.path.expanduser("~/.trino")
 os.makedirs(os.environ["TRINO_CONFIG_DIR"], exist_ok=True)
 from traffic.data import opensky
 import logging
+import math
 logging.basicConfig(level=logging.DEBUG)
 # -----------------------------
 # PROGRESS FILE
@@ -66,27 +67,8 @@ def save_to_db(rows):
     except Exception as e:
         print("Database error:", e)
 
-
-#-----------------------------------OLD VERSION NOT IN USE---------------------------
-# def fetch_trino(day, tile):
-#     start = day.strftime("%Y-%m-%d 00:00:00")
-#     end = (day + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
-
-#     query = f"""
-#         SELECT icao24, callsign, lat, lon, geo_altitude, velocity, heading, time
-#         FROM state_vectors_data4
-#         WHERE time >= TIMESTAMP '{start}'
-#         AND time < TIMESTAMP '{end}'
-#         AND lon BETWEEN {tile['lomin']} AND {tile['lomax']}
-#         AND lat BETWEEN {tile['lamin']} AND {tile['lamax']}
-#         LIMIT 100000
-#         """
-
-#     cursor.execute(query)
-#     return cursor.fetchall()
-#-------------------------------------------------------------------------------------
 # -----------------------------
-# FETCH FUNCTION NO DYNAMIC CHANGES
+# FETCH FUNCTION
 # -----------------------------
 def fetch_trino(day, tile):
     start = day
@@ -120,7 +102,7 @@ def fetch_trino(day, tile):
 # -----------------------------
 # DYNAMIC FETCH FUNCTION
 # -----------------------------
-def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
+def fetch_with_dynamic_split(day, tile, max_duration=45, min_step=0.1):
     """
     Efficient dynamic fetch of OpenSky data with hourly chunks.
     Splits tiles if the query takes too long or tile is too large.
@@ -151,16 +133,9 @@ def fetch_with_dynamic_split(day, tile, max_duration=15, min_step=0.1):
             polite_sleep(duration)
 
             if df_chunk is not None and not df_chunk.empty:
-                rows_chunk = df_chunk[[
-                    "icao24",
-                    "callsign",
-                    "lat",
-                    "lon",
-                    "geoaltitude",
-                    "velocity",
-                    "heading",
-                    "time"
-                ]].itertuples(index=False, name=None)
+                columns_needed = ["icao24","callsign","lat","lon","geoaltitude","velocity","heading","time"]
+                df_chunk = df_chunk.reindex(columns=columns_needed, fill_value=0)
+                rows_chunk = df_chunk.itertuples(index=False, name=None)
                 all_rows.extend(rows_chunk)
 
             start = stop
@@ -237,14 +212,15 @@ def generate_tiles(lat_min, lat_max, lon_min, lon_max, step=0.5):
 def clean_rows(rows):
     cleaned = []
     for r in rows:
-        if r[2] is None or r[3] is None:  # lat/lon
+        lat, lon = r[2], r[3]
+        if lat is None or lon is None or (isinstance(lat, float) and math.isnan(lat)) or (isinstance(lon, float) and math.isnan(lon)):
             continue
-        cleaned.append(tuple(x if x is not None else 0 for x in r))
+        cleaned.append(tuple(0 if x is None or (isinstance(x, float) and math.isnan(x)) else x for x in r))
     return cleaned
 # -----------------------------
 # TILES CHANGES
 # -----------------------------
-tiles = generate_tiles(44.12, 47.68, 11.05, 19.07, step=0.25)
+tiles = generate_tiles(44.00, 48.00, 11.00, 19.00, step=0.25)
 
 # -----------------------------
 # TIMEFRAME CHANGES
@@ -284,6 +260,7 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
                 filename = f"parquet/year={day.year}/month={day.month}/day={day.day}/tile={tile_index}.parquet"
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
                 df.to_parquet(filename, index=False)
+                print(f"Saving {len(rows)} rows to {filename}")
             else:
                 print("No data for this tile")
 
