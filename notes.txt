@@ -24,3 +24,18 @@ Citation:
 https://openskynetwork.github.io/opensky-api/trino.html
 https://opensky-network.org/data/trino
 https://traffic-viz.github.io/
+
+
+
+"icao24": s[0],
+"callsign": s[1].strip() if s[1] else "N/A",
+"lat": s[6],
+"lon": s[5],
+"altitude": s[7],
+"velocity": s[9],
+"heading": s[10],
+
+
+
+
+ctrl + c - end 

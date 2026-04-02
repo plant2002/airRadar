@@ -8,7 +8,10 @@ os.makedirs(os.environ["TRINO_CONFIG_DIR"], exist_ok=True)
 from traffic.data import opensky
 import logging
 import math
-logging.basicConfig(level=logging.DEBUG)
+
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("trino").setLevel(logging.WARNING)
 # -----------------------------
 # PROGRESS FILE
 # -----------------------------
@@ -41,7 +44,7 @@ db_cursor = db.cursor()
 
 insert_sql = """
     INSERT INTO archive
-    (ICAO24, CALLSIGN, LAT, LON, ALTITUDE, VELOCITY, HEADING, TIME)
+    (ICAO24, CALLSIGN, LAT, LON, ALTITUDE, VELOCITY, HEADING, TIME1)
     VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     ON DUPLICATE KEY UPDATE
     CALLSIGN=VALUES(CALLSIGN),
@@ -55,124 +58,115 @@ insert_sql = """
 # SAVE TO DATABASE
 # -----------------------------
 def save_to_db(rows):
-
     if not rows:
         return
 
+    db_rows = []
+    for r in rows:
+        t, icao24, lat, lon, velocity, heading, callsign, geoaltitude = r
+        db_rows.append((
+            icao24,
+            callsign,
+            lat,
+            lon,
+            geoaltitude,
+            velocity,
+            heading,
+            t
+        ))
+
     try:
-        db_cursor.executemany(insert_sql, rows)
+        db_cursor.executemany(insert_sql, db_rows)
         db.commit()
-        print(f"Inserted/updated {db_cursor.rowcount} aircraft")
+        print(f"Inserted/updated {db_cursor.rowcount} rows")
 
     except Exception as e:
         print("Database error:", e)
+        raise
 
 # -----------------------------
 # FETCH FUNCTION
 # -----------------------------
-def fetch_trino(day, tile):
-    start = day
-    all_rows = []
 
-    while start < day + timedelta(days=1):
-        stop = min(start + timedelta(hours=1), day + timedelta(days=1))
+def fetch_and_save_tile(day, tile, tile_index, end_time):
+    start = day
+
+    while start < end_time:
+        stop = min(start + timedelta(hours=1), end_time)
+        print(f"Fetching chunk {start} -> {stop}")
+        print("Bounds:", (tile["lomin"], tile["lamin"], tile["lomax"], tile["lamax"]))
 
         t0 = time.time()
-        df_chunk = opensky.history(
-            start=start,
-            stop=stop,
-            lat=(tile["lamin"], tile["lamax"]),
-            lon=(tile["lomin"], tile["lomax"])
-        )
+
+        df_chunk = None
+
+        for attempt in range(5):
+            try:
+                print(f"Attempt {attempt+1}/5")
+
+                df_chunk = opensky.history(
+                    start=start,
+                    stop=stop,
+                    bounds=(
+                        tile["lomin"],
+                        tile["lamin"],
+                        tile["lomax"],
+                        tile["lamax"]
+                    )
+                )
+                break  # success → exit retry loop
+
+            except RuntimeError as e:
+                if "QUERY_QUEUE_FULL" in str(e):
+                    print("⚠️ Queue full, waiting 60 seconds before retry...")
+                    time.sleep(60)
+                else:
+                    print("Unexpected OpenSky error:", e)
+                    raise
+
         duration = time.time() - t0
+        print("df_chunk is None:", df_chunk is None)
+        print("df_chunk type:", type(df_chunk))
+
+        if df_chunk is None:
+            print("No data in this chunk")
+        else:
+            df_data = df_chunk.data
+            print("df_data empty:", df_data.empty)
+            print("Chunk rows:", len(df_data))
+
+            if not df_data.empty:
+                rows = list(df_data[
+                    ["timestamp", "icao24", "latitude", "longitude", "groundspeed", "track", "callsign", "geoaltitude"]
+                ].itertuples(index=False, name=None))
+
+                rows = clean_rows(rows)
+                print("Cleaned rows:", len(rows))
+
+                if rows:
+                    df = pd.DataFrame(
+                        rows,
+                        columns=["time", "icao24", "lat", "lon", "velocity", "heading", "callsign", "geoaltitude"]
+                    )
+
+                    filename = os.path.abspath(
+                        f"parquet/year={day.year}/month={day.month}/day={day.day}/tile={tile_index}_{start.hour}.parquet"
+                    )
+                    os.makedirs(os.path.dirname(filename), exist_ok=True)
+                    df.to_parquet(filename, index=False)
+
+                    print(f"Saved {len(rows)} rows to {filename}")
+                    print("File exists:", os.path.exists(filename))
+                    print("File size:", os.path.getsize(filename))
+
+                    save_to_db(rows)
+                else:
+                    print("All rows were filtered out by clean_rows()")
+            else:
+                print("No data in this chunk")
+
         polite_sleep(duration)
-
-        if df_chunk is not None and not df_chunk.empty:
-            rows_chunk = df_chunk[[
-                "time", "icao24", "lat", "lon", "velocity",  "heading", "callsign",
-                "geoaltitude"
-            ]].itertuples(index=False, name=None)
-
-            all_rows.extend(rows_chunk)
-
         start = stop
-
-    return clean_rows(all_rows)
-
-# -----------------------------
-# DYNAMIC FETCH FUNCTION
-# -----------------------------
-def fetch_with_dynamic_split(day, tile, max_duration=45, min_step=0.1):
-    """
-    Efficient dynamic fetch of OpenSky data with hourly chunks.
-    Splits tiles if the query takes too long or tile is too large.
-    """
-    try:
-        start_time = time.time()
-
-        # Collect all rows for this tile
-        start = day
-        all_rows = []
-
-        while start < day + timedelta(days=1):
-            stop = min(start + timedelta(hours=1), day + timedelta(days=1))
-
-            t0 = time.time()
-
-            df_chunk = opensky.history(
-                start=start,
-                stop=stop,
-                lat=(tile["lamin"], tile["lamax"]),
-                lon=(tile["lomin"], tile["lomax"])
-            )
-            print(df_chunk.head())
-            print(df_chunk.columns)
-            print(len(df_chunk))
-
-            duration = time.time() - t0
-            polite_sleep(duration)
-
-            if df_chunk is not None and not df_chunk.empty:
-                rows_chunk = df_chunk[[
-                "time", "icao24", "lat", "lon", "velocity",  "heading", "callsign",
-                "geoaltitude"
-                    ]].itertuples(index=False, name=None)
-                all_rows.extend(rows_chunk)
-
-            start = stop
-        total_duration = time.time() - start_time
-
-        # If too slow AND tile is still splittable, split into 4 subtiles
-        if total_duration > max_duration and (tile["lamax"] - tile["lamin"] > min_step):
-            mid_lat = (tile["lamin"] + tile["lamax"]) / 2
-            mid_lon = (tile["lomin"] + tile["lomax"]) / 2
-
-            subtiles = [
-                {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": tile["lomin"], "lomax": mid_lon},
-                {"lamin": tile["lamin"], "lamax": mid_lat, "lomin": mid_lon, "lomax": tile["lomax"]},
-                {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": tile["lomin"], "lomax": mid_lon},
-                {"lamin": mid_lat, "lamax": tile["lamax"], "lomin": mid_lon, "lomax": tile["lomax"]},
-            ]
-
-            # Reset all_rows, recursively fetch from subtiles
-            all_rows = []
-            total_duration = 0
-            for st in subtiles:
-                st_rows, st_duration = fetch_with_dynamic_split(day, st, max_duration, min_step)
-                
-                all_rows.extend(st_rows)
-                total_duration += st_duration
-
-                polite_sleep(st_duration)
-
-            return all_rows, total_duration
-
-        return clean_rows(all_rows), total_duration
-
-    except Exception as e:
-        print("Error fetching tile:", tile, e)
-        return [], 0
-
 # -----------------------------
 # TIME CHUNKS
 # -----------------------------
@@ -221,13 +215,13 @@ def clean_rows(rows):
 # -----------------------------
 # TILES CHANGES
 # -----------------------------
-tiles = generate_tiles(44.00, 48.00, 11.00, 19.00, step=0.25)
-
+tiles = [generate_tiles(44.00, 44.25, 11.00, 11.25, step=0.25)[0]]
 # -----------------------------
 # TIMEFRAME CHANGES
 # -----------------------------
-start_date = datetime(2024, 1, 1)
-end_date   = datetime(2024, 1, 2)
+start_date = datetime(2024, 1, 1, 0, 0, 0)
+end_date   = datetime(2024, 1, 1, 1, 0, 0)
+
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
@@ -244,30 +238,7 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
         try:
             print("Tile:", tile)
             
-            #FETCH DATA + QUERY DURATION
-            rows, query_duration = fetch_with_dynamic_split(day, tile)
-            print(f"Server query time: {query_duration:.2f}s")
-
-            #QUERY TIME WARNING
-            if query_duration > 30:
-                print(f"⚠️ Slow query: {query_duration:.2f}s")
-
-            # SAVE TO PARQUET
-            if rows:
-                df = pd.DataFrame(
-                    rows,
-                    columns=["time", "icao24", "lat", "lon", "velocity",  "heading", "callsign", "geoaltitude"]
-                )
-                filename = f"parquet/year={day.year}/month={day.month}/day={day.day}/tile={tile_index}.parquet"
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
-                df.to_parquet(filename, index=False)
-                print(f"Saving {len(rows)} rows to {filename}")
-            else:
-                print("No data for this tile")
-
-            
-            #SAVE TO DATABASE
-            save_to_db(rows)
+            fetch_and_save_tile(day, tile, tile_index, end_date)
 
             # SAVE PROGRESS
             with open("progress.txt", "w") as f:
@@ -277,4 +248,4 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
 
         except Exception as e:
             print("Error:", e)
-            time.sleep(10)
+            raise
