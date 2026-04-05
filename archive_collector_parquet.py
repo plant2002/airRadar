@@ -17,13 +17,15 @@ logging.getLogger("trino").setLevel(logging.WARNING)
 # -----------------------------
 start_day_index = 0
 start_tile_index = 0
+hour = 0
 
 try:
     with open("progress.txt", "r") as f:
-        d, t = f.read().split(",")
+        d, t, h = f.read().strip().split(",")
         start_day_index = int(d)
         start_tile_index = int(t)
-        print("Resuming from:", start_day_index, start_tile_index)
+        hour = int(h)
+        print("Resuming from:", start_day_index, start_tile_index, hour)
 except:
     print("No progress file, starting fresh")
 # -----------------------------
@@ -64,8 +66,11 @@ def save_to_db(rows):
     db_rows = []
     for r in rows:
         t, icao24, lat, lon, velocity, heading, callsign, geoaltitude = r
+        if hasattr(t, "to_pydatetime"):
+            t = t.to_pydatetime()
+
         db_rows.append((
-            icao24,
+            icao24, 
             callsign,
             lat,
             lon,
@@ -78,7 +83,8 @@ def save_to_db(rows):
     try:
         db_cursor.executemany(insert_sql, db_rows)
         db.commit()
-        print(f"Inserted/updated {db_cursor.rowcount} rows")
+        print(f"Sent {len(db_rows)} rows to MySQL")
+        print(f"MySQL affected-row count: {db_cursor.rowcount}")
 
     except Exception as e:
         print("Database error:", e)
@@ -88,9 +94,11 @@ def save_to_db(rows):
 # FETCH FUNCTION
 # -----------------------------
 
-def fetch_and_save_tile(day, tile, tile_index, end_time):
-    start = day
-
+def fetch_and_save_tile(day, tile, tile_index, end_time, day_index):
+    if day_index == start_day_index and tile_index == start_tile_index:
+        start = day + timedelta (hours=hour)
+    else: 
+        start = day
     while start < end_time:
         stop = min(start + timedelta(hours=1), end_time)
         print(f"Fetching chunk {start} -> {stop}")
@@ -127,6 +135,8 @@ def fetch_and_save_tile(day, tile, tile_index, end_time):
         duration = time.time() - t0
         print("df_chunk is None:", df_chunk is None)
         print("df_chunk type:", type(df_chunk))
+        if duration > 30:
+            print(f"⚠️ Slow chunk: {duration:.2f}s for tile {tile_index}, hour {start.hour}")
 
         if df_chunk is None:
             print("No data in this chunk")
@@ -166,6 +176,10 @@ def fetch_and_save_tile(day, tile, tile_index, end_time):
                 print("No data in this chunk")
 
         polite_sleep(duration)
+        current_hour = start.hour
+        with open("progress.txt", "w") as f:
+             f.write(f"{day_index},{tile_index},{current_hour}")
+        print(f"Progress saved: day={day_index}, tile={tile_index}, hour={current_hour}")
         start = stop
 # -----------------------------
 # TIME CHUNKS
@@ -206,21 +220,38 @@ def generate_tiles(lat_min, lat_max, lon_min, lon_max, step=0.5):
 # -----------------------------
 def clean_rows(rows):
     cleaned = []
+
     for r in rows:
-        lat, lon = r[2], r[3]
-        if lat is None or lon is None or (isinstance(lat, float) and math.isnan(lat)) or (isinstance(lon, float) and math.isnan(lon)):
+        # unpack for readability
+        t, icao24, lat, lon, velocity, heading, callsign, geoaltitude = r
+
+        # skip rows without coordinates
+        if pd.isna(lat) or pd.isna(lon):
             continue
-        cleaned.append(tuple(0 if x is None or (isinstance(x, float) and math.isnan(x)) else x for x in r))
+
+        fixed = []
+        for x in r:
+            if pd.isna(x):
+                fixed.append(None)
+            else:
+                # convert pandas Timestamp to plain Python datetime
+                if hasattr(x, "to_pydatetime"):
+                    fixed.append(x.to_pydatetime())
+                else:
+                    fixed.append(x)
+
+        cleaned.append(tuple(fixed))
+
     return cleaned
 # -----------------------------
 # TILES CHANGES
 # -----------------------------
-tiles = [generate_tiles(44.00, 44.25, 11.00, 11.25, step=0.25)[0]]
+tiles = generate_tiles(44.00, 48, 11.00, 19.00, step=0.2)
 # -----------------------------
 # TIMEFRAME CHANGES
 # -----------------------------
 start_date = datetime(2024, 1, 1, 0, 0, 0)
-end_date   = datetime(2024, 1, 1, 1, 0, 0)
+end_date   = datetime(2024, 1, 2, 0, 0, 0)
 
 # -----------------------------
 # MAIN LOOP
@@ -237,12 +268,8 @@ for day_index, day in enumerate(generate_days(start_date, end_date)):
             continue
         try:
             print("Tile:", tile)
-            
-            fetch_and_save_tile(day, tile, tile_index, end_date)
-
-            # SAVE PROGRESS
-            with open("progress.txt", "w") as f:
-                f.write(f"{day_index},{tile_index}")
+            day_end = min(day + timedelta(days = 1), end_date)
+            fetch_and_save_tile(day, tile, tile_index, day_end, day_index)
 
             time.sleep(2)
 
