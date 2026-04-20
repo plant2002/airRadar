@@ -409,8 +409,8 @@ tiles = generate_tiles(44.00, 48, 11.00, 19.00, step=0.5)
 # -----------------------------
 # TIMEFRAME CHANGES
 # -----------------------------
-start_date = datetime(2024, 1, 1, 0, 0, 0)
-end_date   = datetime(2024, 1, 2, 0, 0, 0)
+start_date = datetime(2024, 1, 3, 0, 0, 0)
+end_date   = datetime(2024, 1, 7, 0, 0, 0)
 
 # -----------------------------
 # MAIN LOOP
