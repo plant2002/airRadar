@@ -39,3 +39,13 @@ https://traffic-viz.github.io/
 ctrl + c - end 
 
 44.00, 48, 11.00, 19.00
+
+
+using:
+pandas
+transformer (pyproj)
+sqlalchemy
+
+
+ ker gre stvar čez dve coni merkatorjeve projekcije bomo to fliknili v lokalni koordinatni sistem
+ 
