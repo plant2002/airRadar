@@ -1,6 +1,10 @@
 from pyproj import Transformer, CRS
 from sqlalchemy import create_engine
 import pandas as pd
+from sklearn.neighbors import KernelDensity
+import numpy as np
+
+
 # -----------------------------
 # DATABASE CONFIG
 # -----------------------------
@@ -57,6 +61,7 @@ def trajectories(rows):
     segments = rows.dropna(subset=['LAT_next', 'LON_next']).copy()
 
     return segments
+
 # -----------------------------
 # MIDPOINTS - SMOOTHING
 # -----------------------------
@@ -66,6 +71,7 @@ def midpoint_smoothing(segments):
     segments["LON_mid"] = (segments["LON"] + segments["LON_next"]) / 2
 
     return segments
+
 # -----------------------------
 # COORDINATE SYSTEM TRANSFOMATION
 # FROM WGS (PHI/LAMBDA) TO WGS(E, N)
@@ -94,12 +100,67 @@ def transform_coordinates(segments):
     return segments
     
 # -----------------------------
+# KERNEL DENSITY
+# -----------------------------
+def kernel_density(segments):
+    #points used for KDE
+    valid_points = segments[["e", "n"]].dropna()
+    points = valid_points.values
+
+    #KDE model
+    #change bandwidth for different smoothing size
+    #it's in meters. so 5000 --> 5 km smoothing
+    kde = KernelDensity(kernel = "gaussian", bandwidth = 5000)
+    #fit KDE to points
+    kde.fit(points)
+
+    #density at the points
+    log_density = kde.score_samples(points)
+    density = np.exp(log_density)
+
+    segments = segments.copy()
+    segments.loc[valid_points.index, "density"] = density
+
+    if segments["density"].max() > segments["density"].min():
+        segments["density_norm"] = (
+        (segments["density"] - segments["density"].min()) /
+            (segments["density"].max() - segments["density"].min())
+        )
+    else:
+        segments["density_norm"] = 0
+
+    return segments
+
+def run_kde(segments, bandwidth = 5000, grid_size = 300):
+    points = segments[["e", "n"]].dropna().values
+
+    kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth)
+    kde.fit(points)
+
+    e_min, e_max = points[:, 0].min(), points[:, 0].max()
+    n_min, n_max = points[:, 1].min(), points[:, 1].max()
+
+    e_grid = np.linspace(e_min, e_max, grid_size)
+    n_grid = np.linspace(n_min, n_max, grid_size)
+
+    E, N = np.meshgrid(e_grid, n_grid)
+
+    grid_points = np.column_stack([
+        E.ravel(),
+        N.ravel()
+    ])
+
+    log_density = kde.score_samples(grid_points)
+    density = np.exp(log_density).reshape(E.shape)
+
+    return E, N, density
+# -----------------------------
 # MAIN CALL FUNCTION
 # -----------------------------
 def main(time_from = None, time_to = None, altitude_from = None, altitude_to = None):
     #check arguments, if None, assign value
     time_from = "2024-01-01 00:00:00" if time_from is None else time_from
-    time_to = "2024-01-02 00:00:00" if time_to is None else time_to
+    time_to = "2024-01-01 01:00:00" if time_to is None else time_to
     altitude_from = 0 if altitude_from is None else altitude_from
     altitude_to = 38000 if altitude_to is None else altitude_to
 
@@ -116,8 +177,11 @@ def main(time_from = None, time_to = None, altitude_from = None, altitude_to = N
 
     segments = transform_coordinates(segments)
 
-    return segments
+    segments = kernel_density(segments)
+    E, N, density_grid = run_kde(segments, bandwidth = 5000, grid_size = 300)
+
+    return segments, E, N, density_grid
 
 
-data = main()
+data, E, N, density_grid = main()
 print(data.head())
