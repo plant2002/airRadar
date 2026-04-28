@@ -3,6 +3,7 @@ from sqlalchemy import create_engine
 import pandas as pd
 from sklearn.neighbors import KernelDensity
 import numpy as np
+import json
 
 
 # -----------------------------
@@ -69,6 +70,7 @@ def trajectories(rows):
 def midpoint_smoothing(segments):
     segments["LAT_mid"] = (segments["LAT"] + segments["LAT_next"]) / 2
     segments["LON_mid"] = (segments["LON"] + segments["LON_next"]) / 2
+    segments["TIME_mid"] = segments["TIME1"] + (segments["TIME_next"] - segments["TIME1"]) / 2
 
     return segments
 
@@ -87,6 +89,7 @@ def make_local_tm():
         f"+ellps=WGS84 +units=m +no_defs"
     )
 
+#add new (local) coordinates to segments
 def transform_coordinates(segments):
 
     local_crs = make_local_tm()
@@ -107,10 +110,14 @@ def kernel_density(segments):
     valid_points = segments[["e", "n"]].dropna()
     points = valid_points.values
 
+    if len(points) == 0:
+        segments["density"] = np.nan
+        segments["density_norm"] = np.nan
+        return segments
     #KDE model
     #change bandwidth for different smoothing size
     #it's in meters. so 5000 --> 5 km smoothing
-    kde = KernelDensity(kernel = "gaussian", bandwidth = 5000)
+    kde = KernelDensity(kernel = "gaussian", bandwidth = 5000, algorithm="ball_tree")
     #fit KDE to points
     kde.fit(points)
 
@@ -154,34 +161,97 @@ def run_kde(segments, bandwidth = 5000, grid_size = 300):
     density = np.exp(log_density).reshape(E.shape)
 
     return E, N, density
+
+# -----------------------------
+# SEGMENTS PREP
+# -----------------------------
+def segments_prep(params):
+    rows = get_data(params)
+    print("Rows used: ", len(rows))
+    
+    segments = trajectories(rows)
+    print("Segments created: ", len(segments))
+
+    segments = midpoint_smoothing(segments)
+    segments = transform_coordinates(segments)
+    segments = kernel_density(segments)
+
+    return segments
+
+# -----------------------------
+# HOURLY ANIMATION FRAMES
+# -----------------------------
+
+def hour_frames(segments):
+
+    segments["hour"] = segments["TIME_mid"].dt.floor("h")
+
+    frames = []
+
+    for hour, group in segments.groupby("hour"):
+        points = group[[
+            "LAT_mid",
+            "LON_mid",
+            "density_norm",
+            "ICAO24",
+            "CALLSIGN",
+            "ALTITUDE",
+            "HEADING",
+            "VELOCITY"
+        ]].dropna(subset = ["LAT_mid", "LON_mid", "density_norm"])
+
+        points = points.rename(columns={
+            "LAT_mid" : "lat",
+            "LON_mid" : "lon", 
+            "density_norm" : "density"
+        })
+
+        frames.append({
+            "time" : str(hour),
+            "points" : points.to_dict(orient = "records")
+        })
+    
+    return frames
+
+
+# -----------------------------
+# JSON 
+# -----------------------------
+def export_data(segments, filename="data.json"):
+    frames = hour_frames(segments)
+
+    result = {
+        "frame_count": len(frames),
+        "frames" : frames
+    }
+
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii= False)
+    
+    print(f"Exported {len(frames)} frames to {filename}")
+
+    return result
 # -----------------------------
 # MAIN CALL FUNCTION
 # -----------------------------
 def main(time_from = None, time_to = None, altitude_from = None, altitude_to = None):
     #check arguments, if None, assign value
     time_from = "2024-01-01 00:00:00" if time_from is None else time_from
-    time_to = "2024-01-01 01:00:00" if time_to is None else time_to
+    time_to = "2024-01-01 05:00:00" if time_to is None else time_to
     altitude_from = 0 if altitude_from is None else altitude_from
     altitude_to = 38000 if altitude_to is None else altitude_to
 
     params = (time_from, time_to, altitude_from, altitude_to)
 
-    #DB 
-    rows = get_data(params)
+    segments = segments_prep(params)
 
-    #from points create segments
-    segments = trajectories(rows)
+    #E, N, density_grid = run_kde(segments, bandwidth = 5000, grid_size = 300)
 
-    #smoothing of segments
-    segments = midpoint_smoothing(segments)
+    export_data(segments)
 
-    segments = transform_coordinates(segments)
+    return segments
 
-    segments = kernel_density(segments)
-    E, N, density_grid = run_kde(segments, bandwidth = 5000, grid_size = 300)
+if __name__ == "__main__":
+    data = main()
 
-    return segments, E, N, density_grid
-
-
-data, E, N, density_grid = main()
-print(data.head())
+    print(data.head())
