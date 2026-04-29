@@ -6,6 +6,11 @@ conda activate traffic-env
 
 CTRL + SHIFT + P --> python: Select Interpreter
 
+import os
+
+os.environ["OPENSKY_USERNAME"] = "your_opensky_username"
+os.environ["OPENSKY_PASSWORD"] = "your_api_password"
+
 
 trino --user=$USER --password --server=https://trino.opensky-network.org --external-authentication --catalog "minio" --schema "osky"74
 
@@ -49,3 +54,17 @@ sqlalchemy
 
  ker gre stvar čez dve coni merkatorjeve projekcije bomo to fliknili v lokalni koordinatni sistem
  
+python -m http.server 8000
+http://localhost:8000
+
+
+SELECT * FROM `archive_new` WHERE ICAO24 = "4bcdfa" and TIME1 IN ( "2024-01-05 12:14:15", "2024-01-05 12:14:00", "2024-01-05 12:13:45")
+
+
+45.1257
+15.3913
+
+n 5,007,134.973
+e 551,320.776
+
+

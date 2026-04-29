@@ -184,6 +184,8 @@ def segments_prep(params):
 
 def hour_frames(segments):
 
+    segments = segments.copy()
+    segments["CALLSIGN"] = segments["CALLSIGN"].fillna("")
     segments["hour"] = segments["TIME_mid"].dt.floor("h")
 
     frames = []
@@ -193,11 +195,6 @@ def hour_frames(segments):
             "LAT_mid",
             "LON_mid",
             "density_norm",
-            "ICAO24",
-            "CALLSIGN",
-            "ALTITUDE",
-            "HEADING",
-            "VELOCITY"
         ]].dropna(subset = ["LAT_mid", "LON_mid", "density_norm"])
 
         points = points.rename(columns={
@@ -205,6 +202,14 @@ def hour_frames(segments):
             "LON_mid" : "lon", 
             "density_norm" : "density"
         })
+
+        MAX_POINTS_PER_FRAME = 3000
+
+        if len(points) > MAX_POINTS_PER_FRAME:
+            points = points.sample(MAX_POINTS_PER_FRAME, random_state=1)
+
+        points = points.astype(object)
+        points = points.where(pd.notnull(points), None)
 
         frames.append({
             "time" : str(hour),
@@ -217,18 +222,15 @@ def hour_frames(segments):
 # -----------------------------
 # JSON 
 # -----------------------------
-def export_data(segments, filename="data.json"):
+def export_data(segments):
     frames = hour_frames(segments)
 
     result = {
         "frame_count": len(frames),
         "frames" : frames
     }
-
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii= False)
     
-    print(f"Exported {len(frames)} frames to {filename}")
+    print(f"Exported {len(frames)} frames")
 
     return result
 # -----------------------------
@@ -246,9 +248,6 @@ def main(time_from = None, time_to = None, altitude_from = None, altitude_to = N
     segments = segments_prep(params)
 
     #E, N, density_grid = run_kde(segments, bandwidth = 5000, grid_size = 300)
-
-    export_data(segments)
-
     return segments
 
 if __name__ == "__main__":

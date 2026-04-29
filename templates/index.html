@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="sl">
+    <head>
+        <title>airRadar</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial_scale = 1">
+        <link rel="stylesheet" href="/static/style.css">
+        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+            integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+            crossorigin=""/>
+        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+        <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+        <script src="/static/scripta.js"></script>
+    </head>
+    <body>
+        <div class = "header">
+            <h1>airRadar</h1>
+            <p>final project for university</p>
+        </div>
+        <div class="main">
+            <div class="map" id="map">
+                
+            </div>
+            <div class="right-panel">
+                <div class="mode-buttons">
+                    <button id="btn-12h">12 UR</button>
+                    <button id="btn-day">DAN</button>
+                    <button id="btn-custom">PO ŽELJI</button>
+                </div>
+                <div class="extra-controls control-box hidden" id="controls-12h">
+                    <h3>12-urni interval</h3>
+
+                    <label for="date-12h">Datum</label>
+                    <input type="date" id="date-12h">
+
+                    <label for="hour-12h">Začetna ura</label>
+                    <input type="number" id="hour-12h" min="0" max="23" value="0">
+
+                    <button id="send-12h">Potrdi</button>
+                </div>
+                <div class="extra-controls control-box hidden" id="controls-day">
+                    <h3>Posamezen dan</h3>
+
+                    <label for="date-day">Datum</label>
+                    <input type="date" id="date-day">
+
+                    <button id="send-day">Potrdi</button>
+                </div>
+                <div class="extra-controls control-box hidden" id="controls-custom">
+                    <h3>Izberi obdobje</h3>
+
+                    <label for="date-from">Od</label>
+                    <input type="date" id="date-from">
+
+                    <label for="date-to">Do</label>
+                    <input type="date" id="date-to">
+
+                    <button id="send-custom">Potrdi</button>
+                </div>
+            </div>
+                <div class="timeline">
+                    <div class="timeline-top">
+                        <button id="play-pause">Pause</button>
+                        <span id="timeline-value">Trenutni časovni korak: 0</span>
+                    </div>
+
+                    <input type="range" id="timeline-slider" min="0" max="100" value="0">
+
+                    <div class="timeline-labels">
+                        <span>Začetek</span>
+                        <span>Ura / Dan / Teden</span>
+                        <span>Konec</span>
+                    </div>
+
+                    <div class="status" id="status">Nisi še izbral podatkov</div>
+                </div>
+            </div>
+        </div>
+        
+    </body>
+    <footer>
+
+    </footer>
+</html>
